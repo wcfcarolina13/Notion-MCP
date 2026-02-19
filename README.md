@@ -71,7 +71,7 @@ A template is provided in `.mcp.json.example` — copy it to `.mcp.json` and fil
 
 Alternatively, set `NOTION_API_TOKEN` in your shell or `.env` file and the server picks it up automatically.
 
-## Tools
+## Tools (17)
 
 ### Pages & Search
 
@@ -90,6 +90,9 @@ Alternatively, set `NOTION_API_TOKEN` in your shell or `.env` file and the serve
 | `append_blocks` | `block_id`, `content` | Append Markdown to a page/block — headings, lists, code fences, checkboxes, quotes, images, dividers all convert correctly. |
 | `update_block` | `block_id`, `content` | Update a specific block's text. Preserves the block type (heading stays a heading, etc.). Supports inline Markdown. |
 | `delete_block` | `block_id` | Delete a block by ID. |
+| `list_children_blocks` | `block_id` | List all child blocks with IDs, types, has_children flags, and content previews. Essential for programmatic page manipulation. |
+| `replace_page_content` | `page_id`, `content` | Atomic rewrite — deletes all existing blocks then appends new Markdown content in one call. |
+| `batch_delete_blocks` | `block_ids` (array) | Delete multiple blocks in one call. Tolerates individual failures and reports results. |
 
 ### Databases
 

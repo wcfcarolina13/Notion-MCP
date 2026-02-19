@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "notion": {
+      "command": "npx",
+      "args": ["tsx", "/Users/roti/gemini_projects/Notion MCP/src/index.ts"],
+      "env": {
+        "NOTION_API_TOKEN": "YOUR_TOKEN_HERE"
+      }
+    }
+  }
+}

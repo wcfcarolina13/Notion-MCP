@@ -39,7 +39,7 @@ workspaces with Markdown-native responses for token efficiency.
 19. [x] Implement `get_users` tool
 20. [x] Server compiles (`npm run build`) with no errors
 21. [x] README.md with setup guide (integration creation, token, sharing pages)
-22. [ ] All code committed
+22. [x] All code committed
 
 ---
 

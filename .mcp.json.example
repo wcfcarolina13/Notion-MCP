@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "notion": {
+      "command": "npx",
+      "args": ["tsx", "/absolute/path/to/Notion-MCP/src/index.ts"],
+      "env": {
+        "NOTION_API_TOKEN": "secret_your_token_here"
+      }
+    }
+  }
+}

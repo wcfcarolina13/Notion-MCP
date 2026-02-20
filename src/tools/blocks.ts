@@ -50,6 +50,55 @@ export function registerBlockTools(server: McpServer) {
     }
   );
 
+  // ── insert_after_block ───────────────────────────────────────────────
+
+  server.tool(
+    "insert_after_block",
+    "Insert content after a specific block within a page. Like append_blocks but positions content after a specified block instead of at the end. Use list_children_blocks first to find the target block ID.",
+    {
+      block_id: z
+        .string()
+        .describe("The parent page or block ID containing the target block"),
+      after: z
+        .string()
+        .describe("Block ID to insert content after (use list_children_blocks to find IDs)"),
+      content: z
+        .string()
+        .describe("Markdown content to insert"),
+    },
+    async ({ block_id, after, content }) => {
+      try {
+        const blocks = markdownToBlocks(content);
+
+        const response = await apiCall(() =>
+          notion.blocks.children.append({
+            block_id,
+            after,
+            children: blocks as Parameters<
+              typeof notion.blocks.children.append
+            >[0]["children"],
+          })
+        );
+
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Inserted ${response.results.length} block(s) after ${after} in ${block_id}`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            { type: "text" as const, text: `Error inserting blocks: ${error}` },
+          ],
+          isError: true,
+        };
+      }
+    }
+  );
+
   // ── update_block ──────────────────────────────────────────────────────
 
   server.tool(

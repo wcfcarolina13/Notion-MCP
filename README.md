@@ -6,7 +6,7 @@ A Markdown-native MCP server for Notion. Read, write, search, and organize your 
 
 Notion wants you to pay for their built-in AI. This MCP server gives Claude direct access to your Notion data instead. The official `@notionhq/notion-mcp-server` returns raw JSON block objects that eat context windows alive. This server converts everything to and from Markdown, making responses **5-10x more token-efficient** while being natural for LLMs to read and produce.
 
-**What you get:** 14 tools covering full CRUD on pages, blocks, databases, comments, and users — all speaking Markdown.
+**What you get:** 18 tools covering full CRUD on pages, blocks, databases, comments, and users — all speaking Markdown.
 
 ## Quick Start
 
@@ -71,7 +71,7 @@ A template is provided in `.mcp.json.example` — copy it to `.mcp.json` and fil
 
 Alternatively, set `NOTION_API_TOKEN` in your shell or `.env` file and the server picks it up automatically.
 
-## Tools (17)
+## Tools (18)
 
 ### Pages & Search
 
@@ -88,6 +88,7 @@ Alternatively, set `NOTION_API_TOKEN` in your shell or `.env` file and the serve
 | Tool | Parameters | Description |
 |------|-----------|-------------|
 | `append_blocks` | `block_id`, `content` | Append Markdown to a page/block — headings, lists, code fences, checkboxes, quotes, images, dividers all convert correctly. |
+| `insert_after_block` | `block_id`, `after`, `content` | Insert Markdown content after a specific block within a page. Like `append_blocks` but positions content at a precise location. Use `list_children_blocks` first to find the target block ID. |
 | `update_block` | `block_id`, `content` | Update a specific block's text. Preserves the block type (heading stays a heading, etc.). Supports inline Markdown. |
 | `delete_block` | `block_id` | Delete a block by ID. |
 | `list_children_blocks` | `block_id` | List all child blocks with IDs, types, has_children flags, and content previews. Essential for programmatic page manipulation. |
@@ -165,7 +166,7 @@ src/
 ├── markdown.ts           # Bidirectional Notion blocks ↔ Markdown + property formatting
 └── tools/
     ├── pages.ts          # search, get_page, create_page, update_page, archive_page
-    ├── blocks.ts         # append_blocks, update_block, delete_block
+    ├── blocks.ts         # append_blocks, insert_after_block, update_block, delete_block, list_children_blocks, replace_page_content, batch_delete_blocks
     ├── databases.ts      # list_databases, get_database, query_database
     └── misc.ts           # get_comments, add_comment, get_users
 ```

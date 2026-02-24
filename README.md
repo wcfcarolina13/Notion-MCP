@@ -6,7 +6,7 @@ A Markdown-native MCP server for Notion. Read, write, search, and organize your 
 
 Notion wants you to pay for their built-in AI. This MCP server gives Claude direct access to your Notion data instead. The official `@notionhq/notion-mcp-server` returns raw JSON block objects that eat context windows alive. This server converts everything to and from Markdown, making responses **5-10x more token-efficient** while being natural for LLMs to read and produce.
 
-**What you get:** 18 tools covering full CRUD on pages, blocks, databases, comments, and users — all speaking Markdown.
+**What you get:** 19 tools covering full CRUD on pages, blocks, databases, comments, and users — all speaking Markdown.
 
 ## Quick Start
 
@@ -102,6 +102,7 @@ Alternatively, set `NOTION_API_TOKEN` in your shell or `.env` file and the serve
 | `list_databases` | `limit?` | List all databases the integration can see. |
 | `get_database` | `database_id` | Get the full schema — property names, types, and select/multi-select/status options. |
 | `query_database` | `database_id`, `filter?`, `sort_property?`, `sort_direction?`, `limit?` | Query with Notion API filters. Returns results as a Markdown table. |
+| `create_database` | `parent_id`, `title`, `properties` (JSON), `is_inline?` | Create a new database under a page. Define schema with typed properties (title, text, number, select, multi_select, date, checkbox, url, status, etc.). |
 
 ### Collaboration
 
@@ -167,7 +168,7 @@ src/
 └── tools/
     ├── pages.ts          # search, get_page, create_page, update_page, archive_page
     ├── blocks.ts         # append_blocks, insert_after_block, update_block, delete_block, list_children_blocks, replace_page_content, batch_delete_blocks
-    ├── databases.ts      # list_databases, get_database, query_database
+    ├── databases.ts      # list_databases, get_database, query_database, create_database
     └── misc.ts           # get_comments, add_comment, get_users
 ```
 

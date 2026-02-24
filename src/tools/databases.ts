@@ -282,4 +282,103 @@ export function registerDatabaseTools(server: McpServer) {
       }
     }
   );
+
+  // ── create_database ─────────────────────────────────────────────────
+
+  server.tool(
+    "create_database",
+    "Create a new Notion database under a parent page. Define the schema with typed properties (title, text, number, select, multi_select, date, checkbox, url, email, phone_number, status, etc.).",
+    {
+      parent_id: z
+        .string()
+        .describe("The page ID to create the database under"),
+      title: z.string().describe("Database title"),
+      properties: z
+        .string()
+        .describe(
+          'JSON object defining properties. Each key is a property name, value is the config. ' +
+          'The database MUST have exactly one "title" property. ' +
+          'Examples: {"Name":{"title":{}},"URL":{"url":{}},"Status":{"select":{"options":[{"name":"New"},{"name":"Done"}]}},' +
+          '"Tags":{"multi_select":{"options":[{"name":"AI"},{"name":"Web"}]}},"Priority":{"number":{}},' +
+          '"Due":{"date":{}},"Done":{"checkbox":{}},"Notes":{"rich_text":{}}}'
+        ),
+      is_inline: z
+        .boolean()
+        .optional()
+        .describe(
+          "If true, creates an inline database (embedded in the page). Default false (full-page database)."
+        ),
+    },
+    async ({ parent_id, title, properties, is_inline }) => {
+      try {
+        let propsObj: Record<string, unknown>;
+        try {
+          propsObj = JSON.parse(properties);
+        } catch {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: 'Error: Invalid JSON in properties. Provide a valid JSON object. Example: {"Name":{"title":{}},"URL":{"url":{}}}',
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        // Validate that exactly one title property exists
+        const titleProps = Object.entries(propsObj).filter(
+          ([, v]) => typeof v === "object" && v !== null && "title" in (v as Record<string, unknown>)
+        );
+        if (titleProps.length === 0) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: 'Error: Database must have exactly one property with {"title":{}}. Example: {"Name":{"title":{}}}',
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        const db = await apiCall(() =>
+          notion.databases.create({
+            parent: { type: "page_id", page_id: parent_id },
+            title: [{ type: "text", text: { content: title } }],
+            properties: propsObj as Parameters<
+              typeof notion.databases.create
+            >[0]["properties"],
+            is_inline: is_inline ?? false,
+          })
+        );
+
+        // Summarize created schema
+        const createdProps = isFullDatabase(db)
+          ? Object.entries(db.properties)
+              .map(([name, prop]) => `  - ${name} (${(prop as { type: string }).type})`)
+              .join("\n")
+          : "(could not read schema)";
+
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Database created: **${title}**\n\nID: ${db.id}\nParent: ${parent_id}\nInline: ${is_inline ?? false}\n\nProperties:\n${createdProps}`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Error creating database: ${error}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+  );
 }

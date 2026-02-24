@@ -9,6 +9,18 @@ import { apiCall, notion, collectAllBlocks } from "./notion-client.js";
 export function richTextToMarkdown(richText: RichTextItemResponse[]): string {
   return richText
     .map((item) => {
+      // Handle mention types (page, database, user, date)
+      if (item.type === "mention") {
+        const m = item as Extract<RichTextItemResponse, { type: "mention" }>;
+        if (m.mention.type === "page") {
+          return `{{page:${m.mention.page.id}}}`;
+        }
+        if (m.mention.type === "database") {
+          return `{{database:${m.mention.database.id}}}`;
+        }
+        // For user mentions, date mentions, etc. — fall through to plain_text
+      }
+
       let text = item.plain_text;
       if (!text) return "";
 
@@ -248,56 +260,70 @@ export async function blocksToMarkdown(
 
 // ── Markdown → Rich Text ──────────────────────────────────────────────────
 
-interface RichTextInput {
-  text: { content: string; link?: { url: string } | null };
-  annotations?: {
-    bold?: boolean;
-    italic?: boolean;
-    strikethrough?: boolean;
-    code?: boolean;
-  };
-}
+type RichTextInput =
+  | {
+      text: { content: string; link?: { url: string } | null };
+      annotations?: {
+        bold?: boolean;
+        italic?: boolean;
+        strikethrough?: boolean;
+        code?: boolean;
+      };
+    }
+  | {
+      type: "mention";
+      mention: { page: { id: string } } | { database: { id: string } };
+    };
 
 function parseInlineMarkdown(text: string): RichTextInput[] {
   const items: RichTextInput[] = [];
-  // Pattern: links, bold, italic, code, strikethrough
+  // Pattern: page/database mentions, links, bold, italic, code, strikethrough
   const regex =
-    /\[([^\]]+)\]\(([^)]+)\)|\*\*(.+?)\*\*|\*(.+?)\*|`(.+?)`|~~(.+?)~~|([^[*`~]+|[*`~[]+)/g;
+    /\{\{(page|database):([^}]+)\}\}|\[([^\]]+)\]\(([^)]+)\)|\*\*(.+?)\*\*|\*(.+?)\*|`(.+?)`|~~(.+?)~~|([^[{*`~]+|[{*`~[]+)/g;
 
   let match: RegExpExecArray | null;
   while ((match = regex.exec(text)) !== null) {
     if (match[1] !== undefined && match[2] !== undefined) {
+      // Mention: {{page:id}} or {{database:id}}
+      const mentionType = match[1] as "page" | "database";
+      const id = match[2].trim();
+      if (mentionType === "page") {
+        items.push({ type: "mention", mention: { page: { id } } });
+      } else {
+        items.push({ type: "mention", mention: { database: { id } } });
+      }
+    } else if (match[3] !== undefined && match[4] !== undefined) {
       // Link: [text](url)
       items.push({
-        text: { content: match[1], link: { url: match[2] } },
-      });
-    } else if (match[3] !== undefined) {
-      // Bold: **text**
-      items.push({
-        text: { content: match[3] },
-        annotations: { bold: true },
-      });
-    } else if (match[4] !== undefined) {
-      // Italic: *text*
-      items.push({
-        text: { content: match[4] },
-        annotations: { italic: true },
+        text: { content: match[3], link: { url: match[4] } },
       });
     } else if (match[5] !== undefined) {
-      // Code: `text`
+      // Bold: **text**
       items.push({
         text: { content: match[5] },
-        annotations: { code: true },
+        annotations: { bold: true },
       });
     } else if (match[6] !== undefined) {
-      // Strikethrough: ~~text~~
+      // Italic: *text*
       items.push({
         text: { content: match[6] },
-        annotations: { strikethrough: true },
+        annotations: { italic: true },
       });
     } else if (match[7] !== undefined) {
+      // Code: `text`
+      items.push({
+        text: { content: match[7] },
+        annotations: { code: true },
+      });
+    } else if (match[8] !== undefined) {
+      // Strikethrough: ~~text~~
+      items.push({
+        text: { content: match[8] },
+        annotations: { strikethrough: true },
+      });
+    } else if (match[9] !== undefined) {
       // Plain text
-      items.push({ text: { content: match[7] } });
+      items.push({ text: { content: match[9] } });
     }
   }
 

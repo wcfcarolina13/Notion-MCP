@@ -140,7 +140,7 @@ Supports 20+ block types:
 | Child pages/databases | Named references with IDs |
 | Embeds, video, file, PDF | Link references |
 
-Rich text annotations preserved: **bold**, *italic*, `code`, ~~strikethrough~~, [links](url).
+Rich text annotations preserved: **bold**, *italic*, `code`, ~~strikethrough~~, [links](url), page mentions (`{{page:id}}`), database mentions (`{{database:id}}`).
 
 Nested blocks (children of toggles, lists, etc.) are indented and recursively rendered.
 
@@ -158,6 +158,8 @@ Line-by-line parser handles the patterns Claude typically produces:
 - `![alt](url)` → Images
 - `{{bookmark:url}}` or `{{bookmark:url|caption}}` → Bookmark blocks (rich URL previews)
 - `{{embed:url}}` → Embed blocks (Twitter, YouTube, GitHub Gists, Figma, etc.)
+- `{{page:page_id}}` → Page mentions (inline cross-references to other pages)
+- `{{database:database_id}}` → Database mentions (inline cross-references to databases)
 - Inline: `**bold**`, `*italic*`, `` `code` ``, `~~strike~~`, `[link](url)`
 
 ## Architecture

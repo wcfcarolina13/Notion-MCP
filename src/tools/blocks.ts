@@ -319,31 +319,50 @@ export function registerBlockTools(server: McpServer) {
       try {
         // 1. Fetch existing top-level blocks
         const existing = await collectAllBlocks(page_id);
-        const deletedCount = existing.length;
+        const totalToDelete = existing.length;
 
-        // 2. Delete all existing blocks
+        // 2. Delete in chunked parallel batches of 10 (prevents timeout on large pages)
         const deleteFailed: string[] = [];
-        for (const block of existing) {
-          try {
-            await apiCall(() => notion.blocks.delete({ block_id: block.id }));
-          } catch (err) {
-            deleteFailed.push(block.id);
+        let deletedCount = 0;
+        const DELETE_BATCH_SIZE = 10;
+
+        for (let i = 0; i < existing.length; i += DELETE_BATCH_SIZE) {
+          const batch = existing.slice(i, i + DELETE_BATCH_SIZE);
+          const results = await Promise.allSettled(
+            batch.map((block) =>
+              apiCall(() => notion.blocks.delete({ block_id: block.id }))
+            )
+          );
+          for (let j = 0; j < results.length; j++) {
+            if (results[j].status === "fulfilled") {
+              deletedCount++;
+            } else {
+              deleteFailed.push(batch[j].id);
+            }
           }
         }
 
-        // 3. Append new content
+        // 3. Convert markdown to blocks
         const newBlocks = markdownToBlocks(content);
-        const response = await apiCall(() =>
-          notion.blocks.children.append({
-            block_id: page_id,
-            children: newBlocks as Parameters<
-              typeof notion.blocks.children.append
-            >[0]["children"],
-          })
-        );
 
-        const createdCount = response.results.length;
-        let summary = `Page content replaced (${page_id})\n- Blocks deleted: ${deletedCount - deleteFailed.length}`;
+        // 4. Insert in chunked batches of 50 (Notion API limit is 100, use 50 for safety)
+        const INSERT_BATCH_SIZE = 50;
+        let createdCount = 0;
+
+        for (let i = 0; i < newBlocks.length; i += INSERT_BATCH_SIZE) {
+          const batch = newBlocks.slice(i, i + INSERT_BATCH_SIZE);
+          const response = await apiCall(() =>
+            notion.blocks.children.append({
+              block_id: page_id,
+              children: batch as Parameters<
+                typeof notion.blocks.children.append
+              >[0]["children"],
+            })
+          );
+          createdCount += response.results.length;
+        }
+
+        let summary = `Page content replaced (${page_id})\n- Blocks deleted: ${deletedCount}/${totalToDelete}`;
         if (deleteFailed.length > 0) {
           summary += `\n- Failed to delete: ${deleteFailed.length} block(s)`;
         }
@@ -380,13 +399,23 @@ export function registerBlockTools(server: McpServer) {
       try {
         let deleted = 0;
         const failed: Array<{ id: string; error: string }> = [];
+        const BATCH_SIZE = 10;
 
-        for (const id of block_ids) {
-          try {
-            await apiCall(() => notion.blocks.delete({ block_id: id }));
-            deleted++;
-          } catch (err) {
-            failed.push({ id, error: String(err) });
+        // Process in parallel batches of 10 (prevents timeout on large sets)
+        for (let i = 0; i < block_ids.length; i += BATCH_SIZE) {
+          const batch = block_ids.slice(i, i + BATCH_SIZE);
+          const results = await Promise.allSettled(
+            batch.map((id) =>
+              apiCall(() => notion.blocks.delete({ block_id: id }))
+            )
+          );
+          for (let j = 0; j < results.length; j++) {
+            if (results[j].status === "fulfilled") {
+              deleted++;
+            } else {
+              const reason = (results[j] as PromiseRejectedResult).reason;
+              failed.push({ id: batch[j], error: String(reason) });
+            }
           }
         }
 

@@ -156,6 +156,8 @@ Line-by-line parser handles the patterns Claude typically produces:
 - `> text` → Blockquotes
 - `---` → Dividers
 - `![alt](url)` → Images
+- `{{bookmark:url}}` or `{{bookmark:url|caption}}` → Bookmark blocks (rich URL previews)
+- `{{embed:url}}` → Embed blocks (Twitter, YouTube, GitHub Gists, Figma, etc.)
 - Inline: `**bold**`, `*italic*`, `` `code` ``, `~~strike~~`, `[link](url)`
 
 ## Architecture

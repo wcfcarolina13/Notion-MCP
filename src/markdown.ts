@@ -114,10 +114,12 @@ async function blockToMarkdown(
     }
     case "bookmark": {
       const b = block as Extract<BlockObjectResponse, { type: "bookmark" }>;
-      const caption = b.bookmark.caption
+      const caption = b.bookmark.caption?.length
         ? richTextToMarkdown(b.bookmark.caption)
-        : b.bookmark.url;
-      line = `[${caption}](${b.bookmark.url})`;
+        : "";
+      line = caption
+        ? `{{bookmark:${b.bookmark.url}|${caption}}}`
+        : `{{bookmark:${b.bookmark.url}}}`;
       break;
     }
     case "table": {
@@ -151,7 +153,7 @@ async function blockToMarkdown(
     }
     case "embed": {
       const b = block as Extract<BlockObjectResponse, { type: "embed" }>;
-      line = `[Embed: ${b.embed.url}](${b.embed.url})`;
+      line = `{{embed:${b.embed.url}}}`;
       break;
     }
     case "video": {
@@ -420,6 +422,35 @@ export function markdownToBlocks(markdown: string): BlockInput[] {
     // Divider: --- or ***
     if (/^[-*_]{3,}\s*$/.test(line.trim())) {
       blocks.push({ type: "divider", divider: {} });
+      i++;
+      continue;
+    }
+
+    // Bookmark: {{bookmark:url}} or {{bookmark:url|caption}}
+    const bookmarkMatch = line.trim().match(/^\{\{bookmark:([^|}]+)(?:\|([^}]+))?\}\}$/);
+    if (bookmarkMatch) {
+      blocks.push({
+        type: "bookmark",
+        bookmark: {
+          url: bookmarkMatch[1].trim(),
+          caption: bookmarkMatch[2]
+            ? [{ text: { content: bookmarkMatch[2].trim() } }]
+            : [],
+        },
+      });
+      i++;
+      continue;
+    }
+
+    // Embed: {{embed:url}}
+    const embedMatch = line.trim().match(/^\{\{embed:([^}]+)\}\}$/);
+    if (embedMatch) {
+      blocks.push({
+        type: "embed",
+        embed: {
+          url: embedMatch[1].trim(),
+        },
+      });
       i++;
       continue;
     }

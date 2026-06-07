@@ -1,7 +1,47 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { notion, apiCall, collectAllBlocks, isFullPage } from "../notion-client.js";
-import { blocksToMarkdown, markdownToBlocks, getPageTitle, formatProperty } from "../markdown.js";
+import { blocksToMarkdown, markdownToBlocks, getPageTitle, formatProperty, buildPropertyValue } from "../markdown.js";
+import { isFullDatabase } from "@notionhq/client";
+
+/**
+ * Resolve a simple { key: value } map into Notion API property objects
+ * by looking up each key's type from the database schema.
+ */
+async function resolveProperties(
+  databaseId: string,
+  userProps: Record<string, unknown>
+): Promise<Record<string, Record<string, unknown>>> {
+  const db = await apiCall(() => notion.databases.retrieve({ database_id: databaseId }));
+  if (!isFullDatabase(db)) {
+    throw new Error("Could not retrieve database schema");
+  }
+
+  const schema = db.properties as Record<string, { type: string }>;
+  const result: Record<string, Record<string, unknown>> = {};
+  const unmatched: string[] = [];
+
+  for (const [key, value] of Object.entries(userProps)) {
+    const schemaProp = schema[key];
+    if (!schemaProp) {
+      unmatched.push(key);
+      continue;
+    }
+    const built = buildPropertyValue(schemaProp.type, value);
+    if (built) {
+      result[key] = built;
+    }
+  }
+
+  if (unmatched.length > 0) {
+    const validNames = Object.keys(schema).join(", ");
+    throw new Error(
+      `Unknown properties: ${unmatched.join(", ")}. Valid properties: ${validNames}`
+    );
+  }
+
+  return result;
+}
 
 export function registerPageTools(server: McpServer) {
   // ── search ────────────────────────────────────────────────────────────
@@ -133,7 +173,12 @@ export function registerPageTools(server: McpServer) {
 
   server.tool(
     "create_page",
-    "Create a new Notion page. Provide Markdown content and a parent (page or database).",
+    `Create a new Notion page. Provide Markdown content and a parent (page or database).
+
+When creating a page in a database, you can set database properties via the "properties" parameter.
+Pass a JSON object with property names as keys and simple values. Types are auto-detected from the database schema.
+
+Example properties: {"Status": "Done", "Priority": 3, "Due": "2026-03-01", "Tags": "urgent, review", "URL": "https://..."}`,
     {
       parent_id: z.string().describe("Parent page ID or database ID"),
       parent_type: z
@@ -145,21 +190,38 @@ export function registerPageTools(server: McpServer) {
         .optional()
         .describe("Page content in Markdown format"),
       icon: z.string().optional().describe("Emoji icon for the page"),
+      properties: z
+        .string()
+        .optional()
+        .describe(
+          'JSON object of database properties to set. Keys are property names, values are simple types. ' +
+          'Example: {"Status": "Done", "Priority": 3, "Due": "2026-03-01", "Tags": "urgent, review"}'
+        ),
     },
-    async ({ parent_id, parent_type, title, content, icon }) => {
+    async ({ parent_id, parent_type, title, content, icon, properties: propertiesJson }) => {
       try {
         const children = content ? markdownToBlocks(content) : [];
+
+        // Start with the title property
+        let properties: Record<string, unknown> = {
+          title: {
+            title: [{ text: { content: title } }],
+          },
+        };
+
+        // If database parent and properties provided, resolve them
+        if (parent_type === "database" && propertiesJson) {
+          const userProps = JSON.parse(propertiesJson) as Record<string, unknown>;
+          const resolved = await resolveProperties(parent_id, userProps);
+          properties = { ...properties, ...resolved };
+        }
 
         const params: Record<string, unknown> = {
           parent:
             parent_type === "database"
               ? { database_id: parent_id }
               : { page_id: parent_id },
-          properties: {
-            title: {
-              title: [{ text: { content: title } }],
-            },
-          },
+          properties,
           children,
         };
 
@@ -171,11 +233,15 @@ export function registerPageTools(server: McpServer) {
           notion.pages.create(params as Parameters<typeof notion.pages.create>[0])
         );
 
+        const propsSet = propertiesJson
+          ? `\n- Properties set: ${Object.keys(JSON.parse(propertiesJson)).join(", ")}`
+          : "";
+
         return {
           content: [
             {
               type: "text" as const,
-              text: `Page created: **${title}**\n- ID: ${page.id}\n- URL: ${"url" in page ? page.url : "N/A"}`,
+              text: `Page created: **${title}**\n- ID: ${page.id}\n- URL: ${"url" in page ? page.url : "N/A"}${propsSet}`,
             },
           ],
         };
@@ -192,22 +258,54 @@ export function registerPageTools(server: McpServer) {
 
   server.tool(
     "update_page",
-    "Update a Notion page's properties (title, icon, cover).",
+    `Update a Notion page's properties (title, icon, cover, and database properties).
+
+For database entries, set properties via the "properties" parameter.
+Pass a JSON object with property names as keys and simple values. Types are auto-detected from the database schema.
+
+Example properties: {"Status": "Done", "Priority": 3, "Due": "2026-03-01", "Tags": "urgent, review"}`,
     {
       page_id: z.string().describe("The Notion page ID to update"),
       title: z.string().optional().describe("New page title"),
       icon: z.string().optional().describe("New emoji icon"),
       cover_url: z.string().optional().describe("New cover image URL"),
+      properties: z
+        .string()
+        .optional()
+        .describe(
+          'JSON object of database properties to set. Keys are property names, values are simple types. ' +
+          'Example: {"Status": "Done", "Priority": 3, "Due": "2026-03-01"}'
+        ),
     },
-    async ({ page_id, title, icon, cover_url }) => {
+    async ({ page_id, title, icon, cover_url, properties: propertiesJson }) => {
       try {
         const params: Record<string, unknown> = { page_id };
+        let resolvedProps: Record<string, unknown> = {};
 
-        if (title) {
+        // Resolve database properties if provided
+        if (propertiesJson) {
+          const userProps = JSON.parse(propertiesJson) as Record<string, unknown>;
+          // Look up the page to find its parent database
+          const page = await apiCall(() => notion.pages.retrieve({ page_id }));
+          if (isFullPage(page) && page.parent.type === "database_id") {
+            resolvedProps = await resolveProperties(page.parent.database_id, userProps);
+          } else {
+            throw new Error(
+              "Cannot set database properties: this page is not a database entry"
+            );
+          }
+        }
+
+        // Build the properties object
+        if (title || Object.keys(resolvedProps).length > 0) {
           params.properties = {
-            title: { title: [{ text: { content: title } }] },
+            ...(title
+              ? { title: { title: [{ text: { content: title } }] } }
+              : {}),
+            ...resolvedProps,
           };
         }
+
         if (icon) {
           params.icon = { type: "emoji", emoji: icon };
         }
@@ -226,6 +324,10 @@ export function registerPageTools(server: McpServer) {
         if (title) updates.push(`title → "${title}"`);
         if (icon) updates.push(`icon → ${icon}`);
         if (cover_url) updates.push(`cover → ${cover_url}`);
+        if (propertiesJson) {
+          const keys = Object.keys(JSON.parse(propertiesJson));
+          updates.push(`properties → ${keys.join(", ")}`);
+        }
 
         return {
           content: [

@@ -4,16 +4,43 @@
 
 - Iterations completed: ALL (22/22 criteria satisfied)
 - Current status: **RALPH COMPLETE** — maintenance/enhancement mode
-- Last activity: 2026-02-21 (Cowork session — capability testing and skill integration)
+- Last activity: 2026-02-24 (Cowork session — resilience upgrades, synced blocks, block stats diagnostics)
 
 ## Session History
+
+### 2026-02-24 — Resilience & Diagnostics Upgrade (Cowork session)
+
+**Changes to `src/tools/blocks.ts`**:
+
+1. **`replace_page_content` — added `skip_delete` parameter**
+   - When `true`, skips the delete phase entirely and goes straight to inserting new blocks
+   - Use case: retry after a timeout where deletion succeeded but insertion failed
+   - Also added block stats output: `N markdown lines → M blocks (Xx ratio)` for inflation tracking
+
+2. **`append_blocks` — added block stats**
+   - Response now includes `markdown lines → blocks (ratio)` diagnostic
+   - Helps track the block count inflation issue over time
+
+3. **`batch_delete_blocks` — improved error resilience**
+   - On unexpected error (e.g. timeout mid-batch), now reports:
+     - How many were deleted so far
+     - How many failed
+     - The remaining unprocessed block IDs (so the caller can resume)
+
+4. **Synced block support — full read/write roundtrip**
+   - **Read** (`blockToMarkdown`): Original synced blocks render as `{{synced_original:id}}` with children below. Reference blocks render as `{{synced_ref:id}}...{{/synced_ref}}` with the original's content fetched inline.
+   - **Write** (`markdownToBlocks`): `{{synced_ref:id}}` creates a reference synced block (content between tags is skipped — it's just the rendered preview). `{{synced_original:id}}` creates an original synced block with subsequent lines as children.
+   - **Block preview** (`getBlockPreview`): Shows `(synced from <id>)` for references, `(synced original)` for originals.
+   - Guard added to prevent double-fetching children on synced reference blocks.
+
+Build verified: clean `tsc` compile with no errors.
 
 ### 2026-02-21 — Cowork Capability Audit & Skill Integration
 
 **Tested by**: Cowork (session gifted-focused-cori)
-**Context**: Building `/process-notion` skill and feedstock-wiki plugin
+**Context**: Building `/process-notion` skill and pontus-wiki plugin
 
-Tested all 22 tools against live Feedstock wiki. Results:
+Tested all 22 tools against live Pontus Wiki. Results:
 
 | Capability | Status | Notes |
 |---|---|---|
@@ -21,7 +48,7 @@ Tested all 22 tools against live Feedstock wiki. Results:
 | insert_after_block | ✅ | Precise insertion, but block count inflation (1 bullet → 20-70+ blocks) |
 | batch_delete_blocks | ✅ | Cleaned 17 items in single call |
 | update_block | ✅ | Updated existing entry with new text |
-| create_page (child page) | ✅ | Created test page under Feedstock wiki |
+| create_page (child page) | ✅ | Created test page under Pontus Wiki |
 | update_page (icon, title, cover) | ✅ | All three metadata fields work |
 | archive_page | ✅ | Archived test page |
 | append_blocks (markdown images) | ✅ | `![alt](url)` creates image blocks |
@@ -38,7 +65,7 @@ Tested all 22 tools against live Feedstock wiki. Results:
 5. Synced block support
 6. Block count inflation investigation — markdown converter splits rich text into many sub-blocks
 
-**17 items processed** from Feedstock wiki Unsorted into correct sections using the MCP tools.
+**17 items processed** from Pontus Wiki Unsorted into correct sections using the MCP tools.
 
 ### Pre-2026-02-21 — Initial Build (Claude Code / Ralph)
 

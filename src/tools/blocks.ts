@@ -21,6 +21,7 @@ export function registerBlockTools(server: McpServer) {
     async ({ block_id, content }) => {
       try {
         const blocks = markdownToBlocks(content);
+        const markdownLines = content.split("\n").filter((l) => l.trim() !== "").length;
 
         const response = await apiCall(() =>
           notion.blocks.children.append({
@@ -31,11 +32,12 @@ export function registerBlockTools(server: McpServer) {
           })
         );
 
+        const ratio = (blocks.length / Math.max(markdownLines, 1)).toFixed(1);
         return {
           content: [
             {
               type: "text" as const,
-              text: `Appended ${response.results.length} block(s) to ${block_id}`,
+              text: `Appended ${response.results.length} block(s) to ${block_id}\n- Block stats: ${markdownLines} markdown lines → ${blocks.length} blocks (${ratio}x ratio)`,
             },
           ],
         };
@@ -224,6 +226,124 @@ export function registerBlockTools(server: McpServer) {
     }
   );
 
+  // ── read_block ──────────────────────────────────────────────────────
+
+  server.tool(
+    "read_block",
+    "Read a single Notion block's full content by ID. Returns complete text without truncation, plus metadata (type, has_children). Use when list_children_blocks previews are truncated (~80 chars).",
+    {
+      block_id: z.string().describe("The block ID to read"),
+    },
+    async ({ block_id }) => {
+      try {
+        const block = await apiCall(() =>
+          notion.blocks.retrieve({ block_id })
+        );
+
+        if (!isFullBlock(block)) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: "Error: Could not retrieve full block data",
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        const type = block.type;
+        const hasChildren = block.has_children;
+
+        // Extract full content based on block type
+        const blockData = (block as Record<string, unknown>)[type] as
+          | { rich_text?: Parameters<typeof richTextToMarkdown>[0]; checked?: boolean }
+          | undefined;
+
+        let fullContent = "";
+
+        if (blockData?.rich_text) {
+          fullContent = richTextToMarkdown(blockData.rich_text);
+          if (type === "to_do" && blockData.checked !== undefined) {
+            fullContent = `[${blockData.checked ? "x" : " "}] ${fullContent}`;
+          }
+        } else {
+          switch (type) {
+            case "code": {
+              const b = block as Extract<BlockObjectResponse, { type: "code" }>;
+              fullContent = `\`\`\`${b.code.language || ""}\n${richTextToMarkdown(b.code.rich_text)}\n\`\`\``;
+              break;
+            }
+            case "bookmark": {
+              const b = block as Extract<BlockObjectResponse, { type: "bookmark" }>;
+              fullContent = b.bookmark.url;
+              if (b.bookmark.caption?.length) {
+                fullContent += ` — ${richTextToMarkdown(b.bookmark.caption)}`;
+              }
+              break;
+            }
+            case "embed": {
+              const b = block as Extract<BlockObjectResponse, { type: "embed" }>;
+              fullContent = b.embed.url;
+              break;
+            }
+            case "image": {
+              const b = block as Extract<BlockObjectResponse, { type: "image" }>;
+              const url = b.image.type === "external" ? b.image.external.url : b.image.file.url;
+              fullContent = `![image](${url})`;
+              break;
+            }
+            case "child_page": {
+              const b = block as Extract<BlockObjectResponse, { type: "child_page" }>;
+              fullContent = `Child page: ${b.child_page.title}`;
+              break;
+            }
+            case "child_database": {
+              const b = block as Extract<BlockObjectResponse, { type: "child_database" }>;
+              fullContent = `Child DB: ${b.child_database.title}`;
+              break;
+            }
+            case "divider":
+              fullContent = "---";
+              break;
+            case "equation": {
+              const b = block as Extract<BlockObjectResponse, { type: "equation" }>;
+              fullContent = b.equation.expression;
+              break;
+            }
+            case "synced_block": {
+              const b = block as Extract<BlockObjectResponse, { type: "synced_block" }>;
+              const from = b.synced_block.synced_from;
+              fullContent = from ? `(synced from ${from.block_id})` : "(synced original)";
+              break;
+            }
+            default:
+              fullContent = `(${type} block — no text content)`;
+          }
+        }
+
+        const lines = [
+          `**Block:** ${block_id}`,
+          `**Type:** ${type}`,
+          `**Has Children:** ${hasChildren}`,
+          `**Content:**`,
+          fullContent,
+        ];
+
+        return {
+          content: [{ type: "text" as const, text: lines.join("\n") }],
+        };
+      } catch (error) {
+        return {
+          content: [
+            { type: "text" as const, text: `Error reading block: ${error}` },
+          ],
+          isError: true,
+        };
+      }
+    }
+  );
+
   // ── delete_block ──────────────────────────────────────────────────────
 
   server.tool(
@@ -310,40 +430,52 @@ export function registerBlockTools(server: McpServer) {
 
   server.tool(
     "replace_page_content",
-    "Replace all content on a page — deletes every existing block then appends new Markdown content. Atomic rewrite operation.",
+    "Replace all content on a page — deletes every existing block then appends new Markdown content. Atomic rewrite operation. Use skip_delete=true to resume after a timeout where deletion succeeded but insertion failed.",
     {
       page_id: z.string().describe("The page ID to rewrite"),
       content: z.string().describe("New Markdown content for the page"),
+      skip_delete: z
+        .boolean()
+        .optional()
+        .default(false)
+        .describe(
+          "Skip the delete phase (use when retrying after deletion succeeded but insertion timed out)"
+        ),
     },
-    async ({ page_id, content }) => {
+    async ({ page_id, content, skip_delete }) => {
       try {
-        // 1. Fetch existing top-level blocks
-        const existing = await collectAllBlocks(page_id);
-        const totalToDelete = existing.length;
-
-        // 2. Delete in chunked parallel batches of 10 (prevents timeout on large pages)
-        const deleteFailed: string[] = [];
         let deletedCount = 0;
-        const DELETE_BATCH_SIZE = 10;
+        let totalToDelete = 0;
+        const deleteFailed: string[] = [];
 
-        for (let i = 0; i < existing.length; i += DELETE_BATCH_SIZE) {
-          const batch = existing.slice(i, i + DELETE_BATCH_SIZE);
-          const results = await Promise.allSettled(
-            batch.map((block) =>
-              apiCall(() => notion.blocks.delete({ block_id: block.id }))
-            )
-          );
-          for (let j = 0; j < results.length; j++) {
-            if (results[j].status === "fulfilled") {
-              deletedCount++;
-            } else {
-              deleteFailed.push(batch[j].id);
+        if (!skip_delete) {
+          // 1. Fetch existing top-level blocks
+          const existing = await collectAllBlocks(page_id);
+          totalToDelete = existing.length;
+
+          // 2. Delete in chunked parallel batches of 10 (prevents timeout on large pages)
+          const DELETE_BATCH_SIZE = 10;
+
+          for (let i = 0; i < existing.length; i += DELETE_BATCH_SIZE) {
+            const batch = existing.slice(i, i + DELETE_BATCH_SIZE);
+            const results = await Promise.allSettled(
+              batch.map((block) =>
+                apiCall(() => notion.blocks.delete({ block_id: block.id }))
+              )
+            );
+            for (let j = 0; j < results.length; j++) {
+              if (results[j].status === "fulfilled") {
+                deletedCount++;
+              } else {
+                deleteFailed.push(batch[j].id);
+              }
             }
           }
         }
 
         // 3. Convert markdown to blocks
         const newBlocks = markdownToBlocks(content);
+        const markdownLines = content.split("\n").filter((l) => l.trim() !== "").length;
 
         // 4. Insert in chunked batches of 50 (Notion API limit is 100, use 50 for safety)
         const INSERT_BATCH_SIZE = 50;
@@ -362,14 +494,20 @@ export function registerBlockTools(server: McpServer) {
           createdCount += response.results.length;
         }
 
-        let summary = `Page content replaced (${page_id})\n- Blocks deleted: ${deletedCount}/${totalToDelete}`;
-        if (deleteFailed.length > 0) {
-          summary += `\n- Failed to delete: ${deleteFailed.length} block(s)`;
+        const lines: string[] = [`Page content replaced (${page_id})`];
+        if (skip_delete) {
+          lines.push("- Delete phase: SKIPPED (resume mode)");
+        } else {
+          lines.push(`- Blocks deleted: ${deletedCount}/${totalToDelete}`);
+          if (deleteFailed.length > 0) {
+            lines.push(`- Failed to delete: ${deleteFailed.length} block(s): ${deleteFailed.join(", ")}`);
+          }
         }
-        summary += `\n- Blocks created: ${createdCount}`;
+        lines.push(`- Blocks created: ${createdCount}`);
+        lines.push(`- Block stats: ${markdownLines} markdown lines → ${newBlocks.length} blocks (${(newBlocks.length / Math.max(markdownLines, 1)).toFixed(1)}x ratio)`);
 
         return {
-          content: [{ type: "text" as const, text: summary }],
+          content: [{ type: "text" as const, text: lines.join("\n") }],
         };
       } catch (error) {
         return {
@@ -396,13 +534,15 @@ export function registerBlockTools(server: McpServer) {
         .describe("Array of block IDs to delete"),
     },
     async ({ block_ids }) => {
-      try {
-        let deleted = 0;
-        const failed: Array<{ id: string; error: string }> = [];
-        const BATCH_SIZE = 10;
+      let deleted = 0;
+      const failed: Array<{ id: string; error: string }> = [];
+      const BATCH_SIZE = 10;
+      let lastProcessedBatch = 0;
 
+      try {
         // Process in parallel batches of 10 (prevents timeout on large sets)
         for (let i = 0; i < block_ids.length; i += BATCH_SIZE) {
+          lastProcessedBatch = i;
           const batch = block_ids.slice(i, i + BATCH_SIZE);
           const results = await Promise.allSettled(
             batch.map((id) =>
@@ -432,13 +572,19 @@ export function registerBlockTools(server: McpServer) {
           isError: failed.length > 0,
         };
       } catch (error) {
+        // On unexpected error (e.g. timeout), report progress and remaining IDs
+        const remaining = block_ids.slice(lastProcessedBatch + BATCH_SIZE);
+        const lines: string[] = [
+          `Error in batch delete: ${error}`,
+          `\nProgress: ${deleted} deleted, ${failed.length} failed`,
+          `Remaining (unprocessed): ${remaining.length} block(s)`,
+        ];
+        if (remaining.length > 0) {
+          lines.push(`Remaining IDs: ${remaining.join(", ")}`);
+        }
+
         return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Error in batch delete: ${error}`,
-            },
-          ],
+          content: [{ type: "text" as const, text: lines.join("\n") }],
           isError: true,
         };
       }
@@ -554,6 +700,11 @@ function getBlockPreview(block: BlockObjectResponse): string {
     case "embed": {
       const b = block as Extract<BlockObjectResponse, { type: "embed" }>;
       return b.embed.url;
+    }
+    case "synced_block": {
+      const b = block as Extract<BlockObjectResponse, { type: "synced_block" }>;
+      const from = b.synced_block.synced_from;
+      return from ? `(synced from ${from.block_id})` : "(synced original)";
     }
     case "divider":
       return "---";

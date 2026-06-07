@@ -1,6 +1,6 @@
 ---
 task: Notion MCP Server — Markdown-native Notion access for Claude
-test_command: "cd '/Users/roti/gemini_projects/Notion MCP' && npx tsx src/index.ts --help 2>&1 || echo 'server file exists'"
+test_command: "cd '/Users/roti/pontus/Notion MCP' && npx tsx src/index.ts --help 2>&1 || echo 'server file exists'"
 ---
 
 # Task: Notion MCP Server
@@ -52,3 +52,14 @@ workspaces with Markdown-native responses for token efficiency.
 5. Update `.ralph/progress.md` with what you accomplished
 6. When ALL criteria are `[x]`, say: **"RALPH COMPLETE - all criteria satisfied"**
 7. If stuck 3+ times on same issue, say: **"RALPH GUTTER - need fresh context"**
+
+## Cross-Project Manifest (REQUIRED)
+
+**On startup**: Read `/Users/roti/pontus/.ralph/RALPH_MANIFEST.md` before beginning work.
+- Check for cross-project context that affects this project
+- Avoid duplicating work already completed in another project
+
+**On completion**: Update the manifest with:
+- This project's current status/phase in the "Project Status" table
+- This project's git health in the "Git Health" table
+- Any cross-project tasks discovered → add to "Cross-Project Backlog"

@@ -216,6 +216,22 @@ async function blockToMarkdown(
       line = parts.join("\n\n");
       break;
     }
+    case "synced_block": {
+      const b = block as Extract<BlockObjectResponse, { type: "synced_block" }>;
+      const syncedFrom = b.synced_block.synced_from;
+      if (syncedFrom) {
+        // Reference block — synced from another block
+        // Fetch the original's children to render inline
+        const originalChildren = await collectAllBlocks(syncedFrom.block_id);
+        const childMd = await blocksToMarkdown(originalChildren, indent);
+        line = `{{synced_ref:${syncedFrom.block_id}}}\n${childMd}\n{{/synced_ref}}`;
+      } else {
+        // Original synced block — render children with a marker
+        // Children are fetched below via has_children handling, so just mark it
+        line = `{{synced_original:${block.id}}}`;
+      }
+      break;
+    }
     default: {
       line = `<!-- unsupported block type: ${type} -->`;
       break;
@@ -223,12 +239,18 @@ async function blockToMarkdown(
   }
 
   // Handle nested children (for blocks with has_children)
+  // Skip types that handle their own children: table, column_list, column,
+  // and synced_block references (content comes from the original)
+  const isSyncedRef =
+    type === "synced_block" &&
+    (block as Extract<BlockObjectResponse, { type: "synced_block" }>).synced_block.synced_from !== null;
   let children = "";
   if (
     block.has_children &&
     type !== "table" &&
     type !== "column_list" &&
-    type !== "column"
+    type !== "column" &&
+    !isSyncedRef
   ) {
     const childBlocks = await collectAllBlocks(block.id);
     children = await blocksToMarkdown(childBlocks, indent + 1);
@@ -481,6 +503,53 @@ export function markdownToBlocks(markdown: string): BlockInput[] {
       continue;
     }
 
+    // Synced block reference: {{synced_ref:block_id}}
+    const syncedRefMatch = line.trim().match(/^\{\{synced_ref:([^}]+)\}\}$/);
+    if (syncedRefMatch) {
+      blocks.push({
+        type: "synced_block",
+        synced_block: {
+          synced_from: {
+            type: "block_id",
+            block_id: syncedRefMatch[1].trim(),
+          },
+        },
+      });
+      // Skip content lines until {{/synced_ref}} (they're just the rendered preview)
+      i++;
+      while (i < lines.length && !lines[i].trim().match(/^\{\{\/synced_ref\}\}$/)) {
+        i++;
+      }
+      if (i < lines.length) i++; // skip the closing tag
+      continue;
+    }
+
+    // Synced block original: {{synced_original:block_id}}
+    // When writing, this creates an original synced block. Collect children until next heading or empty synced marker.
+    const syncedOriginalMatch = line.trim().match(/^\{\{synced_original:([^}]*)\}\}$/);
+    if (syncedOriginalMatch) {
+      // Collect subsequent lines as children until we hit another synced marker, heading, or end
+      const childLines: string[] = [];
+      i++;
+      while (
+        i < lines.length &&
+        !lines[i].trim().match(/^\{\{synced_(original|ref):/) &&
+        !lines[i].match(/^#{1,3}\s+/)
+      ) {
+        childLines.push(lines[i]);
+        i++;
+      }
+      const childBlocks = markdownToBlocks(childLines.join("\n"));
+      blocks.push({
+        type: "synced_block",
+        synced_block: {
+          synced_from: null,
+          children: childBlocks,
+        },
+      });
+      continue;
+    }
+
     // Image: ![alt](url)
     const imageMatch = line.match(/^!\[([^\]]*)\]\(([^)]+)\)/);
     if (imageMatch) {
@@ -542,6 +611,79 @@ export function getPageTitle(page: {
 }
 
 // ── Property Formatting ───────────────────────────────────────────────────
+
+/**
+ * Convert a simple user-provided value into a Notion API property object,
+ * based on the property type from the database schema.
+ */
+export function buildPropertyValue(
+  type: string,
+  value: unknown
+): Record<string, unknown> | null {
+  if (value === null || value === undefined || value === "") return null;
+
+  switch (type) {
+    case "title":
+      return { title: [{ text: { content: String(value) } }] };
+    case "rich_text":
+      return { rich_text: [{ text: { content: String(value) } }] };
+    case "number":
+      return { number: typeof value === "number" ? value : Number(value) };
+    case "select":
+      return { select: { name: String(value) } };
+    case "status":
+      return { status: { name: String(value) } };
+    case "multi_select": {
+      const items = Array.isArray(value)
+        ? value.map((v) => ({ name: String(v) }))
+        : String(value)
+            .split(",")
+            .map((s) => ({ name: s.trim() }))
+            .filter((s) => s.name);
+      return { multi_select: items };
+    }
+    case "date": {
+      if (typeof value === "string") {
+        // Support "start" or "start → end" or "start / end"
+        const parts = value.split(/\s*[→\/]\s*/);
+        return {
+          date: {
+            start: parts[0].trim(),
+            ...(parts[1] ? { end: parts[1].trim() } : {}),
+          },
+        };
+      }
+      if (typeof value === "object" && value !== null) {
+        return { date: value };
+      }
+      return { date: { start: String(value) } };
+    }
+    case "checkbox":
+      return {
+        checkbox:
+          typeof value === "boolean"
+            ? value
+            : String(value).toLowerCase() === "true" ||
+              String(value).toLowerCase() === "yes",
+      };
+    case "url":
+      return { url: String(value) };
+    case "email":
+      return { email: String(value) };
+    case "phone_number":
+      return { phone_number: String(value) };
+    case "people": {
+      const ids = Array.isArray(value) ? value : [value];
+      return { people: ids.map((id) => ({ object: "user", id: String(id) })) };
+    }
+    case "relation": {
+      const ids = Array.isArray(value) ? value : [value];
+      return { relation: ids.map((id) => ({ id: String(id) })) };
+    }
+    default:
+      return null;
+  }
+}
 
 export function formatProperty(prop: Record<string, unknown>): string {
   const type = prop.type as string;
